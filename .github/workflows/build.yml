@@ -33,6 +33,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
+      # The tag as artifact names take it (no slash).
+      label: ${{ steps.pick.outputs.label }}
       build: ${{ steps.pick.outputs.build }}
     steps:
       - id: pick
@@ -51,6 +53,8 @@ jobs:
           fi
           [[ -n "$tag" ]] || { echo "::error::no horizon tag matches $PATTERN"; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          label="${tag//\//-}"
+          echo "label=$label" >> "$GITHUB_OUTPUT"
           # The tag must have the horizon-extras feature (docs/forking.md in horizon).
           cargo_toml=$(curl -fsSL "https://raw.githubusercontent.com/horizon-rust/horizon/$tag/crates/horizon-client/Cargo.toml")
           if ! grep -q '^horizon-extras = ' <<<"$cargo_toml"; then
@@ -60,7 +64,7 @@ jobs:
           fi
           # A scheduled run builds a tag once (while its artifacts are kept).
           if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
-            kept=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=horizon-plain-linux-x86_64-$tag" \
+            kept=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=horizon-plain-linux-x86_64-$label" \
               --jq '[.artifacts[] | select(.expired | not)] | length')
             if [[ "$kept" != 0 ]]; then
               echo "::notice::$tag is built already"
@@ -129,7 +133,7 @@ jobs:
             "$TAG" "$TAG" "$(git -C horizon rev-parse HEAD)" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > "$out/BUILD.txt"
       - uses: actions/upload-artifact@v4
         with:
-          name: horizon-plain-${{ matrix.name }}-${{ needs.pick.outputs.tag }}
+          name: horizon-plain-${{ matrix.name }}-${{ needs.pick.outputs.label }}
           path: horizon-plain-${{ matrix.name }}
           retention-days: 90
           if-no-files-found: error
