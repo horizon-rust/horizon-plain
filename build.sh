@@ -17,22 +17,13 @@ git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$tag" \
   https://github.com/horizon-rust/horizon.git "$src"
 cd "$src"
 
-# The client's default features minus horizon-extras (docs/forking.md in horizon).
-features=$(python3 - <<'PY'
-import sys, tomllib
-features = tomllib.load(open("crates/horizon-client/Cargo.toml", "rb")).get("features", {})
-default = features.get("default", [])
-if "horizon-extras" not in default:
-    sys.exit(3)
-print(",".join(f for f in default if f != "horizon-extras"))
-PY
-) || {
-  code=$?
-  if [[ $code == 3 ]]; then
-    echo "$tag predates the horizon-extras feature: there is no plain build of it" >&2
-  fi
-  exit "$code"
-}
+# The client's default features minus horizon-extras (docs/forking.md in horizon); `default` is one line.
+default=$(sed -n 's/^default = \[\(.*\)\]$/\1/p' crates/horizon-client/Cargo.toml | head -n 1 | tr -d ' "')
+if [[ ",$default," != *",horizon-extras,"* ]]; then
+  echo "$tag predates the horizon-extras feature: there is no plain build of it" >&2
+  exit 3
+fi
+features=$(tr ',' '\n' <<<"$default" | grep -vx 'horizon-extras' | paste -sd, -)
 echo "Building $tag ($(git rev-parse --short HEAD)) with features: $features"
 
 # The version the game shows, as the official build of that tag says it.
