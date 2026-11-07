@@ -1,0 +1,23 @@
+Horizon without its extras
+==========================
+
+Horizon is an unofficial fan project, not affiliated with, endorsed by or
+connected to Mojang Studios or Microsoft. Minecraft is a trademark of Mojang
+and Microsoft. This folder contains none of Minecraft's code, textures or
+sounds: Horizon prepares them from your own copy of Minecraft Java Edition.
+
+This is the game alone, built without Horizon's extras (no cosmetics, no
+launcher, no mods browser, no updates). Official Horizon with launcher, mods
+and updates: https://playhorizon.dev
+
+You need Minecraft Java Edition 26.3, played once from the official launcher,
+and a Java 25 runtime. Then, in this folder:
+  ./horizon-prepare --prepare --server-jar PATH/TO/server.jar
+  ./horizon-prepare sounds               (optional, for sound)
+(Windows: horizon-prepare.exe.) The 26.3 server jar is the downloads.server.url
+in your launcher's versions/26.3/26.3.json. Add --minecraft-dir PATH to both if
+your launcher keeps the game elsewhere. Then run ./horizon-client
+(horizon-client.exe on Windows; on macOS the first time: right-click > Open).
+horizon-client --help lists the options.
+
+Signing in to online-mode servers needs the official launcher's session.

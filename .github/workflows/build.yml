@@ -1,0 +1,133 @@
+name: build
+run-name: plain ${{ inputs.tag || 'newest official release' }}
+
+# Builds Horizon without its extras from horizon-rust/horizon's official release tags, on
+# GitHub-hosted runners only. Every 6 hours it looks for the newest tag matching TAG_PATTERN (a
+# repository variable; default: vX.Y.Z releases, not Nightlies) and builds it once. Best effort:
+# a failure here blocks nothing in horizon.
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "horizon tag to build (empty: the newest official release)"
+        required: false
+        default: ""
+      exporters:
+        description: "official release whose exporters/ to ship (empty: the tag's own); for test builds of a branch"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: plain
+  cancel-in-progress: false
+
+jobs:
+  pick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      build: ${{ steps.pick.outputs.build }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANTED: ${{ inputs.tag }}
+          PATTERN: ${{ vars.TAG_PATTERN || '^v[0-9]+\.[0-9]+\.[0-9]+$' }}
+        run: |
+          set -euo pipefail
+          tag="$WANTED"
+          if [[ -z "$tag" ]]; then
+            tag=$(git ls-remote --tags --refs https://github.com/horizon-rust/horizon.git \
+              | sed 's#.*refs/tags/##' | grep -E "$PATTERN" | sort -V | tail -n 1)
+          fi
+          [[ -n "$tag" ]] || { echo "::error::no horizon tag matches $PATTERN"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          # The tag must have the horizon-extras feature (docs/forking.md in horizon).
+          cargo_toml=$(curl -fsSL "https://raw.githubusercontent.com/horizon-rust/horizon/$tag/crates/horizon-client/Cargo.toml")
+          if ! grep -q '^horizon-extras = ' <<<"$cargo_toml"; then
+            echo "::notice::$tag predates the horizon-extras feature: nothing to build"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A scheduled run builds a tag once (while its artifacts are kept).
+          if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
+            kept=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=horizon-plain-linux-x86_64-$tag" \
+              --jq '[.artifacts[] | select(.expired | not)] | length')
+            if [[ "$kept" != 0 ]]; then
+              echo "::notice::$tag is built already"
+              echo "build=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "build=true" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: pick
+    if: needs.pick.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-22.04
+          - name: windows-x64
+            os: windows-latest
+            exe: .exe
+            # The C runtime linked in, as in the official build.
+            rustflags: -C target-feature=+crt-static
+          - name: macos-arm64
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+      TAG: ${{ needs.pick.outputs.tag }}
+      EXPORTERS: ${{ inputs.exporters || needs.pick.outputs.tag }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: ALSA and udev headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
+      - name: Build
+        run: ./build.sh "$TAG"
+      - name: Package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXE: ${{ matrix.exe }}
+        run: |
+          set -euo pipefail
+          out="horizon-plain-${{ matrix.name }}"
+          mkdir "$out"
+          for binary in horizon-client horizon-prepare; do
+            cp "horizon/target/release/$binary$EXE" "$out/"
+          done
+          cp horizon/LICENSE "$out/LICENSE"
+          # horizon-prepare's exporters are compiled against Minecraft's jars, which only the official build
+          # has: take them (Horizon's own classes only) from that tag's official Linux archive.
+          [[ "$EXPORTERS" == "$TAG" ]] || echo "::warning::exporters/ from $EXPORTERS, not $TAG: a test build"
+          mkdir official
+          gh release download "$EXPORTERS" -R horizon-rust/horizon -p 'horizon-linux-x86_64.tar.gz' -D official
+          tar xzf official/horizon-linux-x86_64.tar.gz -C official
+          cp -R official/*/exporters "$out/exporters"
+          cp PLAY.txt "$out/PLAY.txt"
+          printf 'Horizon %s without its extras, built from https://github.com/horizon-rust/horizon/tree/%s (%s)\nby %s/%s/actions/runs/%s. Unsigned.\n' \
+            "$TAG" "$TAG" "$(git -C horizon rev-parse HEAD)" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > "$out/BUILD.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: horizon-plain-${{ matrix.name }}-${{ needs.pick.outputs.tag }}
+          path: horizon-plain-${{ matrix.name }}
+          retention-days: 90
+          if-no-files-found: error
