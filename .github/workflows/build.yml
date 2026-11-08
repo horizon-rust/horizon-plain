@@ -1,10 +1,12 @@
 name: build
 run-name: plain ${{ inputs.tag || 'newest official release' }}
 
-# Builds Horizon without its extras from horizon-rust/horizon's official releases, on GitHub-hosted
-# runners only. Every 6 hours it takes the newest release that is not a pre-release (so never a
-# Nightly) whose tag matches TAG_PATTERN (a repository variable; default vX.Y.Z), and builds it
-# once. Best effort: a failure here blocks nothing in horizon.
+# Builds Horizon without its extras from horizon-rust/horizon's published releases, on GitHub-hosted
+# runners only. Every 6 hours it takes the newest dated Nightly (or official release) whose tag
+# matches TAG_PATTERN (a repository variable; default: dated Nightlies nightly-YYYY-MM-DD…) and
+# that was published at least LAG_DAYS days ago (a repository variable; default 7), so the plain
+# build always trails the official one. It builds each tag once. Best effort: a failure here
+# blocks nothing in horizon.
 on:
   schedule:
     - cron: "17 */6 * * *"
@@ -41,15 +43,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           WANTED: ${{ inputs.tag }}
-          PATTERN: ${{ vars.TAG_PATTERN || '^v[0-9]+\.[0-9]+\.[0-9]+$' }}
+          PATTERN: ${{ vars.TAG_PATTERN || '^nightly-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' }}
+          LAG_DAYS: ${{ vars.LAG_DAYS || '7' }}
         run: |
           set -euo pipefail
           tag="$WANTED"
           if [[ -z "$tag" ]]; then
-            # The newest published release that is not a pre-release (Nightlies are pre-releases).
+            # The newest published release (dated Nightlies are pre-releases) at least LAG_DAYS old.
+            cutoff=$(date -u -d "-${LAG_DAYS} days" +%Y-%m-%dT%H:%M:%SZ)
             tag=$(gh api "repos/horizon-rust/horizon/releases?per_page=100" --paginate \
-              --jq '.[] | select((.draft or .prerelease) | not) | [.published_at, .tag_name] | @tsv' \
-              | awk -F'\t' '$2 ~ ENVIRON["PATTERN"]' | sort -r | head -n 1 | cut -f2)
+              --jq '.[] | select(.draft | not) | [.published_at, .tag_name] | @tsv' \
+              | awk -F'\t' -v cutoff="$cutoff" '$2 ~ ENVIRON["PATTERN"] && $1 <= cutoff' \
+              | sort -r | head -n 1 | cut -f2)
           fi
           [[ -n "$tag" ]] || { echo "::error::no horizon tag matches $PATTERN"; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
