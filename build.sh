@@ -28,7 +28,13 @@ echo "Building $tag ($(git rev-parse --short HEAD)) with features: $features"
 
 # The version the game shows, as the official build of that tag says it.
 export HORIZON_VERSION="${tag#v}"
+# The package holding the plain executable `horizon-client`: horizon-game once it moved there (horizon's
+# docs/layers.md, layer plan M6), horizon-client before. Both take the same feature names.
+package=horizon-client
+if grep -qx 'name = "horizon-client"' crates/horizon-game/Cargo.toml 2>/dev/null; then
+  package=horizon-game
+fi
 cargo build --release --locked ${target:+--target "$target"} \
-  -p horizon-client --no-default-features --features "$features" --bin horizon-client
+  -p "$package" --no-default-features --features "$features" --bin horizon-client
 # horizon-prepare makes the game's files from the player's own Minecraft install.
 cargo build --release --locked ${target:+--target "$target"} -p horizon-prepare --bin horizon-prepare
